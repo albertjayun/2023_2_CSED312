@@ -311,6 +311,7 @@ thread_yield (void)
     list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
+  
   intr_set_level (old_level);
 }
 
