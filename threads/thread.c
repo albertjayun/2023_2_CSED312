@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/fp_arithm.h" //fp연산용 헤더
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -23,6 +24,8 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
+
+static struct list sleeping_list; //***list of threads that are 'sleeping'
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
@@ -91,6 +94,7 @@ thread_init (void)
 
   lock_init (&tid_lock);
   list_init (&ready_list);
+  list_init (&sleeping_list); //***initialize sleeping_list
   list_init (&all_list);
 
   /* Set up a thread structure for the running thread. */
@@ -242,6 +246,31 @@ thread_unblock (struct thread *t)
   intr_set_level (old_level);
 }
 
+void thread_sleep(int64_t wakeup_time){
+  enum intr_level old_level = intr_disable(); //인터럽트 끄기
+  
+  struct thread *cur = thread_current();
+  ASSERT (cur != idle_thread); //idle 쓰레드가 아닌걸 확인
+  cur->wake_up_time = wakeup_time; //현재 쓰레드의 wakeup time 설정
+  list_push_back(&sleeping_list, &cur->elem); //sleeping list에 현재 쓰레드 추가
+  thread_block(); //현재 쓰레드 블락
+
+  intr_set_level(old_level); //인터럽트 켜기
+}
+
+void thread_wakeup(){
+  int64_t curr_time = timer_ticks();
+  struct thread *t;
+  for(struct list_elem *e = list_begin(&sleeping_list); e != list_end(&sleeping_list);){
+    t = list_entry(e, struct thread, elem);
+    if(t->wake_up_time <= curr_time){ //wakeup time이 ticks보다 작은 쓰레드를 찾으면
+      e = list_remove(e); //sleeping list에서 제거
+      thread_unblock(t); //깨우기
+    }
+    else e = list_next(e); //아니면 다음 쓰레드로
+  }
+}
+
 /* Returns the name of the running thread. */
 const char *
 thread_name (void) 
@@ -350,15 +379,36 @@ thread_get_priority (void)
 void
 thread_set_nice (int nice UNUSED) 
 {
-  /* Not yet implemented. */
+  enum intr_level old_level = intr_disable();
+
+  struct thread *cur = thread_current();
+  cur->nice = nice;
+  set_MLFQS_priority(cur);
+  list_sort(&ready_list, compare_priority_desc, NULL); //재진이형 코드의 함수로 대체
+  if(cur != idle_thread)thread_preepmt();//sorting 과 동시에 preepmt
+
+  intr_set_level(old_level);
+}
+//recent_cpu = decay * recent_cpu + nice
+//decay = 2*load_avg / (2*load_avg + 1)
+calc_recent_cpu(struct thread *t){
+  int decay = fp_to_int_rounding(fp_div(fp_mul_int(load_avg, 2), fp_add_int(fp_mul_int(load_avg, 2), 1)));
+  t->recent_cpu = ((decay * t->recent_cpu)+ t->nice);
+}
+
+void recent_cpu_update(){
+  struct thread *t;
+  for(struct list_elem *e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)){
+    t = list_entry(e, struct thread, allelem);
+    calc_recent_cpu(t);
+  }
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current ()->nice;
 }
 
 /* Returns 100 times the system load average. */
@@ -373,10 +423,32 @@ thread_get_load_avg (void)
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current ()-> recent_cpu*100;
 }
 
+
+void set_MLFQS_priority(struct thread *t){//MLFQS priority 계산 후 셋팅
+  if(t == idle_thread) return;//idle thread 면 무시
+
+  int mlfqs_priority = PRI_MAX - fp_to_int_rounding(fp_div_int(t->recent_cpu / 4) - int_to_fp(t->nice * 2));
+  
+  if(mlfqs_priority > PRI_MAX) t->priority = PRI_MAX;
+  else if(mlfqs_priority < PRI_MIN) t->priority = PRI_MIN;//범위 넘어갈 경우
+  else t->priority = mlfqs_priority;
+}
+
+void MLFQS_priority_update(){//모든 쓰레드를 MLFQS priority로 업데이트
+  struct thread *t;
+    for(struct list_elem *e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)){
+      t = list_entry(e, struct thread, allelem);
+      set_MLFQS_priority(t);
+    }
+  list_sort(&ready_list, compare_priority_desc, NULL); //재진이형 코드의 함수로 대체
+}
+
+
+
+
 /* Idle thread.  Executes when no other thread is ready to run.
 
    The idle thread is initially put on the ready list by
@@ -463,6 +535,9 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->nice = 0; //nice 초기화
+  t->recent_cpu = 0; //cpu 사용량 초기화
+  t->wake_up_time = 0; //wakeup 초기화
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
