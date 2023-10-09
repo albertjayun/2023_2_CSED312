@@ -170,7 +170,18 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
-  thread_wakeup(); 
+
+  thread_wakeup(); //매 틱 마다 thread_wakeup() 호출
+
+
+  /*mlfqs관련*/
+  if(thread_mlfqs && timer_ticks() % TIMER_FREQ == 0){ //1초마다
+      calc_load_avg(); //load_avg 계산
+      recent_cpu_update(); //recent_cpu 업데이트
+  }
+  if(thread_mlfqs && timer_ticks() % 4 == 0){ //4틱마다
+      MLFQS_priority_update();//priority 업데이트
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

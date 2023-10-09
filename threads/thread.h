@@ -90,8 +90,8 @@ struct thread
     int priority;                       /* Priority. */
     int nice;                           //nice 값
     int recent_cpu;                     //최근 cpu 사용량
+    int64_t wakeup_time;                //sleep 에서 깨어나야 할 시간
     struct list_elem allelem;           /* List element for all threads list. */
-    int64_t wake_up_time;               //sleep 에서 깨어나야 할 시간
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 

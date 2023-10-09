@@ -62,6 +62,9 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
 
+/*ready 쓰레드 갯수 시스템 전역 변수*/
+int load_avg;
+
 static void kernel_thread (thread_func *, void *aux);
 
 static void idle (void *aux UNUSED);
@@ -73,6 +76,7 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -391,18 +395,36 @@ thread_set_nice (int nice UNUSED)
 }
 //recent_cpu = decay * recent_cpu + nice
 //decay = 2*load_avg / (2*load_avg + 1)
-calc_recent_cpu(struct thread *t){
-  int decay = fp_to_int_rounding(fp_div(fp_mul_int(load_avg, 2), fp_add_int(fp_mul_int(load_avg, 2), 1)));
-  t->recent_cpu = ((decay * t->recent_cpu)+ t->nice);
+void calc_recent_cpu(struct thread *t){//nice 와 decay 를 이용해 쓰레드의 recent_cpu를 계산
+  int decay = fp_div(fp_mul_int(load_avg, 2), fp_add_int(fp_mul_int(load_avg, 2), 1));
+  t->recent_cpu = fp_add_int(fp_mul(decay, t->recent_cpu),t->nice);
 }
 
-void recent_cpu_update(){
+void increase_recent_cpu(){// recent_cpu를 1 증가
+  struct thread *cur = thread_current();
+  if(t == idle_thread) return;//idle thread 면 무시
+  cur->recent_cpu = fp_add_int(t->recent_cpu, 1);}
+
+/*load_avg = (59 / 60) * load_avg + (1 / 60) * ready_threads */
+calc_load_avg(){//load_avg 계산
+  int ready_threads;
+  if(thread_current() != idle_thread) ready_threads = list_size(&ready_list)+1;
+  else ready_threads = list_size(&ready_list);
+ 
+  load_avg = mult_fp(fp_div(int_to_fp(59),int_to_fp(60)),load_avg) + //59/60 * load_avg
+  fp_div_int(int_to_fp(ready_threads),60); //1/60 * ready_threads
+}
+
+
+void recent_cpu_update(){//모든 쓰레드의 recent_cpu를 업데이트
   struct thread *t;
   for(struct list_elem *e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)){
     t = list_entry(e, struct thread, allelem);
     calc_recent_cpu(t);
   }
 }
+
+
 
 /* Returns the current thread's nice value. */
 int
